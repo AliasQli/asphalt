@@ -1,0 +1,45 @@
+cabal-version:      2.4
+name:               asphalt
+version:            0.1.0.0
+author:             Alias Qli
+maintainer:         2576814881@qq.com
+copyright:          2022 Alias Qli
+extra-source-files: CHANGELOG.md
+
+library
+  exposed-modules: 
+      ADT
+    , Typecheck
+    , Latex
+  hs-source-dirs:
+    src
+  ghc-options: 
+    -Wall
+    -Wcompat
+    -Wincomplete-record-updates
+    -Wincomplete-uni-patterns
+    -Wredundant-constraints
+    -Wno-name-shadowing
+    -Wno-orphans
+  build-depends:
+      base        >= 4.7 && < 5
+    , mtl        
+  default-language: Haskell2010
+
+executable examples
+    main-is:          Main.hs
+    ghc-options: 
+      -O
+      -j
+      -Wall
+      -Wcompat
+      -Wincomplete-record-updates
+      -Wincomplete-uni-patterns
+      -Wredundant-constraints
+      -Wno-name-shadowing
+      -Wno-orphans
+    build-depends:    
+        base >= 4.7 && < 5
+      , asphalt
+    hs-source-dirs:   app
+    default-language: Haskell2010
