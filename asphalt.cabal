@@ -12,6 +12,7 @@ library
     , Typecheck
     , Latex
     , HVM
+    , Type
   hs-source-dirs:
     src
   ghc-options: 

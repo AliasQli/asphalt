@@ -2,7 +2,6 @@ module Main where
 
 import AST
 import Typecheck
-import HVM (traslateSrc)
 
 exp1 :: AST
 exp1 = Lam "f" (One :->: One) $ Lam "x" One $ Var "f" `App` Var "x"
@@ -23,15 +22,16 @@ exp6 :: AST
 exp6 = Lam "b" (One :+: One) $ Lam "n" (One :&: One) $ CasePlus (Var "b") "x" (Fst (Var "n")) "y" (Snd (Var "n"))
 
 nat :: Type
-nat = TypeVar "Nat"
+nat = TypeCall "Nat"
 
 modal :: Type -> Type
-modal = (TypeVar "!" :.:)
+modal = (TypeCall "!" :.:)
 
 source :: Source
 source =
   [ TypeDecl "Nat" $ Mu "a" $ One :+: TypeVar "a"
   , TypeDecl "!" $ TypeLam "A" Type $ Mu "a" $ TypeVar "A" :*: TypeVar "a"
+  , TypeDecl "X" $ modal nat
   , TermDecl "Zero" $ Fold nat $ Inl nat Star
   , TermDecl "Succ" $ Lam "x" nat $ Fold nat $ Inr One (Var "x")
   -- , TermDecl "dup!" $ Lam "x" (modal nat) $ LetTensor "a" "x'" (Unfold (Var "x")) $ LetTensor "b" "x''" (Unfold (Var "x'")) $ Tensor (Var "a") (Var "b")
@@ -56,7 +56,4 @@ source =
   ]
 
 main :: IO ()
-main = do
-  runCheckSource source
-  putStrLn ""
-  print $ traslateSrc source
+main = runCheckSource source
