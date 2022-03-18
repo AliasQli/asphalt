@@ -147,6 +147,7 @@ data AST
   = Lam Var Type AST              -- λ (Var : Type). AST
   | App AST AST                   -- AST AST
   | Var Var                       -- Var
+  | Call String                   -- String
   | Tensor AST AST                -- AST * AST
   | LetTensor Var Var AST AST     -- let Var * Var = AST in AST
   | Star                          -- *

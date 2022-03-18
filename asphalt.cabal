@@ -11,6 +11,7 @@ library
       AST
     , Typecheck
     , Latex
+    , HVM
   hs-source-dirs:
     src
   ghc-options: 

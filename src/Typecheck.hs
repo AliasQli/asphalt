@@ -122,7 +122,7 @@ maybeModalType ty = do
     _ -> pure Nothing
 
 typecheck :: AST -> Typecheck (Type, Latex)
-typecheck adt@(Lam var ty body) = do
+typecheck ast@(Lam var ty body) = do
   checkWellType ty
   i <- serial
   inc <- getContext
@@ -130,8 +130,8 @@ typecheck adt@(Lam var ty body) = do
   (ty', premise) <- typecheck body
   modContext (strip i)
   out <- getContext
-  retLatex $ latex [premise] (Judgement inc out adt (ty :->: ty')) LolipopI
-typecheck adt@(App f x) = do
+  retLatex $ latex [premise] (Judgement inc out ast (ty :->: ty')) LolipopI
+typecheck ast@(App f x) = do
   inc <- getContext
   (fTy, fPremise) <- typecheck f
   (xTy, xPremise) <- typecheck x
@@ -142,29 +142,31 @@ typecheck adt@(App f x) = do
       tyN <- normalizeType ty
       xTyN <- normalizeType xTy
       unless (tyN == xTyN) $ throwError $ "type mismatch: can't apply " <> show f <> " : " <> show fTy <> " to " <> show x <> " : " <> show xTy
-      retLatex $ latex [fPremise, xPremise] (Judgement inc out adt ty') LolipopE
+      retLatex $ latex [fPremise, xPremise] (Judgement inc out ast ty') LolipopE
     _ -> throwError $ "type mismatch: " <> show f <> " : " <> show fTy <> " is not of a function type"
-typecheck adt@(Var var) = do
+typecheck ast@(Var var) = do
   inc <- getContext
   case filter (\(a, _, _) -> a == var) inc of
     (_, i, ty) : _ -> do
       modContext (strip i)
       out <- getContext
-      retLatex $ latex [] (Judgement inc out adt ty) Nil
-    [] -> do
-      global <- getTypings
-      case filter (\(Typing a _) -> a == var) global of
-        typing@(Typing _ ty) : _ -> do
-          let out = inc
-          retLatex $ Latex (Right typing) (Judgement inc out adt ty) Intro
-        [] -> throwError $ "variable not found in context or global terms: " ++ var
-typecheck adt@(Tensor a b) = do
+      retLatex $ latex [] (Judgement inc out ast ty) Nil
+    [] -> throwError $ "variable not found in context: " ++ var
+typecheck ast@(Call var) = do
+  inc <- getContext
+  global <- getTypings
+  case filter (\(Typing a _) -> a == var) global of
+    typing@(Typing _ ty) : _ -> do
+      let out = inc
+      retLatex $ Latex (Right typing) (Judgement inc out ast ty) Intro
+    [] -> throwError $ "term name not found in global terms: " ++ var
+typecheck ast@(Tensor a b) = do
   inc <- getContext
   (aTy, aPremise) <- typecheck a
   (bTy, bPremise) <- typecheck b
   out <- getContext
-  retLatex $ latex [aPremise, bPremise] (Judgement inc out adt (aTy :*: bTy)) TensorI
-typecheck adt@(LetTensor v1 v2 t body) = do
+  retLatex $ latex [aPremise, bPremise] (Judgement inc out ast (aTy :*: bTy)) TensorI
+typecheck ast@(LetTensor v1 v2 t body) = do
   inc <- getContext
   (tTy, tPremise) <- typecheck t
   tTyW <- whnfType tTy
@@ -176,25 +178,25 @@ typecheck adt@(LetTensor v1 v2 t body) = do
       (ty, premise) <- typecheck body
       modContext (strip ai . strip bi)
       out <- getContext
-      retLatex $ latex [tPremise, premise] (Judgement inc out adt ty) TensorE
+      retLatex $ latex [tPremise, premise] (Judgement inc out ast ty) TensorE
     _ -> throwError $ "type mismatch: " <> show t <> " : " <> show tTy <> " is not of a tensor type"
-typecheck adt@Star = do
+typecheck ast@Star = do
   inc <- getContext
   let out = inc
-  retLatex $ latex [] (Judgement inc out adt One) OneI
-typecheck adt@(Inl bTy a) = do
+  retLatex $ latex [] (Judgement inc out ast One) OneI
+typecheck ast@(Inl bTy a) = do
   checkWellType bTy
   inc <- getContext
   (aTy, premise) <- typecheck a
   out <- getContext
-  retLatex $ latex [premise] (Judgement inc out adt (aTy :+: bTy)) TensorI
-typecheck adt@(Inr aTy b) = do
+  retLatex $ latex [premise] (Judgement inc out ast (aTy :+: bTy)) TensorI
+typecheck ast@(Inr aTy b) = do
   checkWellType aTy
   inc <- getContext
   (bTy, premise) <- typecheck b
   out <- getContext
-  retLatex $ latex [premise] (Judgement inc out adt (aTy :+: bTy)) TensorI
-typecheck adt@(CasePlus x v1 b1 v2 b2) = do
+  retLatex $ latex [premise] (Judgement inc out ast (aTy :+: bTy)) TensorI
+typecheck ast@(CasePlus x v1 b1 v2 b2) = do
   inc <- getContext
   (xTy, premise) <- typecheck x
   xTyW <- whnfType xTy
@@ -216,10 +218,10 @@ typecheck adt@(CasePlus x v1 b1 v2 b2) = do
       b1TyN <- normalizeType b1Ty
       b2TyN <- normalizeType b2Ty
       if b1TyN == b2TyN
-        then retLatex $ latex [premise, b1Premise, b2Premise] (Judgement inc out adt (min b1Ty b2Ty)) PlusE
+        then retLatex $ latex [premise, b1Premise, b2Premise] (Judgement inc out ast (min b1Ty b2Ty)) PlusE
         else throwError $ "type mismatch: " <> show b1 <> " : " <> show b1Ty <> " and " <> show b2 <> " : " <> show b2Ty <> " are not of the same type"
     _ -> throwError $ "type mismatch: " <> show x <> " : " <> show xTy <> " is not of a sum type"
-typecheck adt@(Absurd ty a) = do
+typecheck ast@(Absurd ty a) = do
   checkWellType ty
   inc <- getContext
   (aTy, premise) <- typecheck a
@@ -227,9 +229,9 @@ typecheck adt@(Absurd ty a) = do
   case aTyW of
     Zero -> do
       out <- getContext
-      retLatex $ latex [premise] (Judgement inc out adt ty) ZeroE
+      retLatex $ latex [premise] (Judgement inc out ast ty) ZeroE
     _ -> throwError $ "type mismatch: " <> show a <> " : " <> show aTy <> " is not of type 0"
-typecheck adt@(With a b) = do
+typecheck ast@(With a b) = do
   inc <- getContext
   (aTy, premise) <- typecheck a
   context1 <- getContext
@@ -237,26 +239,26 @@ typecheck adt@(With a b) = do
   (bTy, premise') <- typecheck b
   context2 <- getContext
   let out = context1 `intersect` context2
-  retLatex $ latex [premise, premise'] (Judgement inc out adt (aTy :&: bTy)) WithI
-typecheck adt@(Fst a) = do
+  retLatex $ latex [premise, premise'] (Judgement inc out ast (aTy :&: bTy)) WithI
+typecheck ast@(Fst a) = do
   inc <- getContext
   (aTy, premise) <- typecheck a
   aTyW <- whnfType aTy
   case aTyW of
     ty :&: _ -> do
       out <- getContext
-      retLatex $ latex [premise] (Judgement inc out adt ty) WithEL
+      retLatex $ latex [premise] (Judgement inc out ast ty) WithEL
     _ -> throwError $ "type mismatch: " <> show a <> " : " <> show aTy <> " is not of a with type"
-typecheck adt@(Snd a) = do
+typecheck ast@(Snd a) = do
   inc <- getContext
   (aTy, premise) <- typecheck a
   aTyW <- whnfType aTy
   case aTyW of
     _ :&: ty -> do
       out <- getContext
-      retLatex $ latex [premise] (Judgement inc out adt ty) WithER
+      retLatex $ latex [premise] (Judgement inc out ast ty) WithER
     _ -> throwError $ "type mismatch: " <> show a <> " : " <> show aTy <> " is not of a with type"
-typecheck adt@(Fold ty body) = do
+typecheck ast@(Fold ty body) = do
   checkWellType ty
   tyW <- whnfType ty
   case tyW of
@@ -268,10 +270,10 @@ typecheck adt@(Fold ty body) = do
       expandedN <- normalizeType expanded
       tyN' <- normalizeType ty'
       if expandedN == tyN'
-        then retLatex $ latex [premise] (Judgement inc out adt ty) MuI
+        then retLatex $ latex [premise] (Judgement inc out ast ty) MuI
         else throwError $ "type mismatch: " <> show body <> " : " <> show ty' <> " is not of type " <> show expanded
     _ -> throwError $ "type mismatch: " <> show ty <> " is not a recursive type"
-typecheck adt@(Unfold body) = do
+typecheck ast@(Unfold body) = do
   inc <- getContext
   (ty, premise) <- typecheck body
   out <- getContext
@@ -280,9 +282,9 @@ typecheck adt@(Unfold body) = do
     Mu v t -> do
       let expanded = expand (Just ty) v t
       tell $ show (ty, tyW, expanded)
-      retLatex $ latex [premise] (Judgement inc out adt expanded) MuE
+      retLatex $ latex [premise] (Judgement inc out ast expanded) MuE
     _ -> throwError $ "type mismatch: " <> show ty <> " is not a recursive type"
-typecheck adt@(Fix v ty body) = do
+typecheck ast@(Fix v ty body) = do
   maybeTy <- maybeModalType ty
   case maybeTy of
     Just innerTyW -> do
@@ -296,7 +298,7 @@ typecheck adt@(Fix v ty body) = do
           innerTyN <- normalizeType innerTyW
           tyN' <- normalizeType ty'
           if innerTyN == tyN'
-            then retLatex $ latex [premise] (Judgement inc [] adt (min innerTyW ty')) ByFix
+            then retLatex $ latex [premise] (Judgement inc [] ast (min innerTyW ty')) ByFix
             else throwError $ "type mismatch: " <> show body <> " : " <> show ty' <> " is not of type " <> show innerTyW
         else throwError $ "type mismatch: current context `" <> show inc <> "` contains non-modal type"
     Nothing -> throwError $ "type mismatch: " <> show ty <> " is not a modal type"

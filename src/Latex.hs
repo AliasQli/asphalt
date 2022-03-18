@@ -51,6 +51,7 @@ instance Show AST where
   showsPrec d (App e1 e2) = showParen (d > 10) $
     showsPrec 10 e1 . showString " " . showsPrec 11 e2
   showsPrec _ (Var v) = showString v
+  showsPrec _ (Call c) = showString c
   showsPrec d (Tensor e1 e2) = showParen (d > 4) $
     showsPrec 5 e1 . showString " ⊗ " . showsPrec 5 e2
   showsPrec d (LetTensor v1 v2 e1 e2) = showParen (d > 1) $
@@ -85,6 +86,7 @@ instance ShowLatex AST where
   showsLatexPrec d (App e1 e2) = showParen (d > 10) $
     showsLatexPrec 10 e1 . showString " \\space " . showsLatexPrec 11 e2
   showsLatexPrec _ (Var v) = showString v
+  showsLatexPrec _ (Call c) = showString "\\text{" . showString c . showString "}"
   showsLatexPrec d (Tensor e1 e2) = showParen (d > 4) $
     showsLatexPrec 5 e1 . showString " \\otimes " . showsLatexPrec 5 e2
   showsLatexPrec d (LetTensor v1 v2 e1 e2) = showParen (d > 1) $
@@ -210,7 +212,7 @@ instance Show Typing where
   show (Typing name ty) = name ++ " : " ++ show ty
 
 instance ShowLatex Typing where
-  showLatex (Typing name ty) = name ++ " : " ++ showLatex ty
+  showLatex (Typing name ty) = "\\text{" ++ name ++ "} : " ++ showLatex ty
 
 data Latex = Latex (Either [Latex] Typing) Judgement By
 
@@ -229,7 +231,7 @@ data Synonym
     }
 
 instance Show Synonym where
-  show (Synonym name nf kind) = "type " ++ name ++ " --> " ++ show nf ++ " : " ++ show kind
+  show (Synonym name nf kind) = "type " ++ name ++ " => " ++ show nf ++ " : " ++ show kind
 
 instance ShowLatex Synonym where
   showLatex (Synonym name nf kind) = "\\text{type } " ++ name ++ " \\hookrightarrow " ++ showLatex nf ++ " : " ++ showLatex kind
