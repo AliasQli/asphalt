@@ -1,10 +1,11 @@
 cabal-version:      2.4
 name:               asphalt
-version:            0.1.0.0
+version:            0.1.0
 author:             Alias Qli
 maintainer:         2576814881@qq.com
 copyright:          2022 Alias Qli
 extra-source-files: CHANGELOG.md
+                    READE.md
 
 library
   exposed-modules: 
@@ -13,6 +14,7 @@ library
     , Latex
     , HVM
     , Type
+    , Parser
   hs-source-dirs:
     src
   ghc-options: 
@@ -23,12 +25,16 @@ library
     -Wredundant-constraints
     -Wno-name-shadowing
     -Wno-orphans
+    -Wno-unused-do-bind
   build-depends:
-      base        >= 4.7 && < 5
-    , mtl        
+      base             >= 4.7 && < 5
+    , mtl              >= 2.2 && < 2.3
+    , megaparsec       >= 9.2 && < 9.3
+    , text             >= 1.2 && < 1.3
+    , template-haskell >= 2 && < 3
   default-language: Haskell2010
 
-executable examples
+executable asphalt
     main-is:          Main.hs
     ghc-options: 
       -O
@@ -40,8 +46,12 @@ executable examples
       -Wredundant-constraints
       -Wno-name-shadowing
       -Wno-orphans
+      -Wno-unused-do-bind
     build-depends:    
-        base >= 4.7 && < 5
+        base           >= 4.7 && < 5
       , asphalt
+      , text
+      , megaparsec
+      , filepath       >= 1.4 && < 1.5
     hs-source-dirs:   app
     default-language: Haskell2010

@@ -1,10 +1,30 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Latex where
+import Data.Text (Text)
+import qualified Data.Text.IO as T
+type TextS = Text -> Text
+
+class ShowText a where
+  textPrec :: Int -> a -> TextS
+  text :: a -> Text
+  textPrec _ x s = text x <> s
+  text x = textPrec 0 x ""
+
+printText :: ShowText a => a -> IO ()
+printText = T.putStrLn . text
+
+showText :: Text -> TextS
+showText = (<>)
+
+showTextParen :: Bool -> TextS -> TextS
+showTextParen b p   =  if b then showText "(" . p . showText ")" else p
 
 class ShowLatex a where
-  showsLatexPrec :: Int -> a -> ShowS
-  showLatex      :: a -> String
+  showsLatexPrec :: Int -> a -> TextS
+  showLatex      :: a -> Text
   showsLatexPrec _ x s = showLatex x <> s
   showLatex x          = showsLatexPrec 0 x ""
   {-# MINIMAL showsLatexPrec | showLatex #-}
@@ -21,23 +41,23 @@ data By
   | Nil
   deriving (Eq, Ord)
 
-instance Show By where
-  show LolipopI = "⊗I"
-  show LolipopE = "⊗E"
-  show TensorI = "⊗I"
-  show TensorE = "⊗E"
-  show OneI = "1I"
-  show PlusIL = "⊕IL"
-  show PlusIR = "⊕IR"
-  show PlusE = "⊕E"
-  show ZeroE = "0E"
-  show WithI = "&I"
-  show WithEL = "&EL"
-  show WithER = "&ER"
-  show MuI = "μI"
-  show MuE = "μE"
-  show ByFix = "fix"
-  show Nil = ""
+instance ShowText By where
+  text LolipopI = "⊗I"
+  text LolipopE = "⊗E"
+  text TensorI = "⊗I"
+  text TensorE = "⊗E"
+  text OneI = "1I"
+  text PlusIL = "⊕IL"
+  text PlusIR = "⊕IR"
+  text PlusE = "⊕E"
+  text ZeroE = "0E"
+  text WithI = "&I"
+  text WithEL = "&EL"
+  text WithER = "&ER"
+  text MuI = "μI"
+  text MuE = "μE"
+  text ByFix = "fix"
+  text Nil = ""
 
 instance ShowLatex By where
   showLatex LolipopI = "\\multimap \\text{I}"

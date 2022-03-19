@@ -1,2 +1,6 @@
 dist-newstyle/
 hvm/
+*.aphi
+*.hvmp
+!runtime.hvmp
+*.hvm

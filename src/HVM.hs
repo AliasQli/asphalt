@@ -1,48 +1,56 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
+
 module HVM where
 
-import Data.String
 import Prelude hiding (snd, fst)
 import Data.Maybe
+import qualified Data.Text as T
+import Data.Text (Text)
+import Language.Haskell.TH
+import Language.Haskell.TH.Syntax
+import qualified Data.Text.IO as T
 
 import AST
+import Latex
 
-type CtorName = String
-type VarName = String
+type CtorName = Text
+type VarName = Text
 
 newtype HVMSrc = HVMSrc [HVM]
 
-instance Show HVMSrc where
-  show (HVMSrc hvms) = unlines $ map show hvms
+instance ShowText HVMSrc where
+  text (HVMSrc hvms) = T.unlines $ map text hvms
 
 data HVM = LHS := RHS
 
-instance Show HVM where
-  show (lhs := rhs) = show lhs <> " = " <> show rhs
+instance ShowText HVM where
+  text (lhs := rhs) = text lhs <> " = " <> text rhs
 
 data LHS = LHS CtorName [Pattern]
 
-instance Show LHS where
-  show (LHS ctorName []) = "(" <> ctorName <> ")"
-  show (LHS ctorName patterns) = "(" <> ctorName <> " " <> unwords (show <$> patterns) <> ")"
+instance ShowText LHS where
+  text (LHS ctorName []) = "(" <> ctorName <> ")"
+  text (LHS ctorName patterns) = "(" <> ctorName <> " " <> T.unwords (text <$> patterns) <> ")"
 
 data Pattern
   = CtorPat CtorName [Pattern]
   | VarPat VarName
 
-instance Show Pattern where
-  show (CtorPat ctorName []) = "(" <> ctorName <> ")"
-  show (CtorPat ctorName patterns) = "(" <> ctorName <> " " <> unwords (show <$> patterns) <> ")"
-  show (VarPat varName) = varName
+instance ShowText Pattern where
+  text (CtorPat ctorName []) = "(" <> ctorName <> ")"
+  text (CtorPat ctorName patterns) = "(" <> ctorName <> " " <> T.unwords (text <$> patterns) <> ")"
+  text (VarPat varName) = varName
 
 data RHS
   = Apply Bool RHS [RHS]
   | Lambda VarName RHS
-  | Intro String
+  | Intro Text
 
-instance Show RHS where
-  show (Apply _ f xs) = "(" <> unwords (show <$> f : xs) <> ")"
-  show (Lambda v b) = "λ" <> v <> " " <> show b
-  show (Intro v) = v
+instance ShowText RHS where
+  text (Apply _ f xs) = "(" <> T.unwords (text <$> f : xs) <> ")"
+  text (Lambda v b) = "λ" <> v <> " " <> text b
+  text (Intro v) = v
 
 term :: CtorName -> LHS
 term s = LHS s []
@@ -93,7 +101,7 @@ unfold x = x
 call :: CtorName -> RHS
 call f = Intro f `apply` []
 
-var :: String -> RHS
+var :: Text -> RHS
 var = Intro
 
 fix :: VarName -> RHS -> RHS
@@ -118,8 +126,13 @@ translate (Fold _ ast) = fold (translate ast)
 translate (Unfold ast) = unfold (translate ast)
 translate (Fix p _ ast) = fix p (translate ast)
 
-traslateSrc :: Source -> HVMSrc
-traslateSrc = HVMSrc . mapMaybe f
+translateSrc :: Source -> HVMSrc
+translateSrc = HVMSrc . mapMaybe f
   where
     f (TypeDecl _ _) = Nothing
     f (TermDecl nm ast) = Just $ term nm := translate ast
+
+runtime :: ExpQ
+runtime = do
+  hvm <- runIO $ T.readFile "runtime.hvmp"
+  lift hvm

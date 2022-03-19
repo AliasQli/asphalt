@@ -1,59 +1,55 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
+
 module Main where
 
-import AST
+import System.Environment
+import qualified Data.Text.IO as T
+import Text.Megaparsec
+import Control.Monad
+import System.Exit
+import System.FilePath
+import Data.Text (Text)
+
 import Typecheck
-
-exp1 :: AST
-exp1 = Lam "f" (One :->: One) $ Lam "x" One $ Var "f" `App` Var "x"
-
-exp2 :: AST
-exp2 = Lam "f" (One :->: One :->: One) $ Lam "x" (One :*: One) $ LetTensor "a" "b" (Var "x") (Var "f" `App` Var "a" `App` Var "b")
-
-exp3 :: AST
-exp3 = Lam "x" (One :*: One) $ LetTensor "a" "b" (Var "x") $ Var "b"
-
-exp4 :: AST
-exp4 = Lam "y" One $ Lam "x" ((One :*: One) :+: One) $ CasePlus (Var "x") "a" (LetTensor "m" "n" (Var "a") (Var "m")) "b" (Var "y")
-
-exp5 :: AST
-exp5 = Lam "x" Zero $ Absurd One (Var "x")
-
-exp6 :: AST
-exp6 = Lam "b" (One :+: One) $ Lam "n" (One :&: One) $ CasePlus (Var "b") "x" (Fst (Var "n")) "y" (Snd (Var "n"))
-
-nat :: Type
-nat = TypeCall "Nat"
-
-modal :: Type -> Type
-modal = (TypeCall "!" :.:)
-
-source :: Source
-source =
-  [ TypeDecl "Nat" $ Mu "a" $ One :+: TypeVar "a"
-  , TypeDecl "!" $ TypeLam "A" Type $ Mu "a" $ TypeVar "A" :*: TypeVar "a"
-  , TypeDecl "X" $ modal nat
-  , TermDecl "Zero" $ Fold nat $ Inl nat Star
-  , TermDecl "Succ" $ Lam "x" nat $ Fold nat $ Inr One (Var "x")
-  -- , TermDecl "dup!" $ Lam "x" (modal nat) $ LetTensor "a" "x'" (Unfold (Var "x")) $ LetTensor "b" "x''" (Unfold (Var "x'")) $ Tensor (Var "a") (Var "b")
-  -- , TermDecl "dup"  $ Fix "c" (modal $ nat :->: nat :*: nat) $ Lam "x" nat $ CasePlus (Unfold $ Var "x")
-  --     "s" (Tensor (Var "zero") (Var "zero"))
-  --     "p" $ LetTensor "rec" "d" (Unfold $ Var "c") $ LetTensor "x1" "x2" (Var "rec" `App` Var "p") $ Tensor (Var "succ" `App` Var "x1") (Var "succ" `App` Var "x2")
-  , TermDecl "Pred" $ Lam "x" nat $ CasePlus (Unfold (Var "x")) 
-      "s" (Call "Zero")
-      "n" (Var "n")
-  -- , TermDecl "Zeros" $ Fix "p" (modal $ modal nat) $ LetTensor "q" "r" (Unfold $ Var "p") $ Fold (modal nat) $ Tensor (Var "Zero") (Var "q")
-  , TermDecl "Plus" $ Fix "p" (modal $ nat :->: nat :->: nat) $ Lam "x" nat $ Lam "y" nat $ 
-      CasePlus (Unfold (Var "x"))
-        "s" (Var "y")
-        "n" $ LetTensor "rec" "q" (Unfold (Var "p")) $ Call "Succ" `App` (Var "rec" `App` Var "n" `App` Var "y")
-  , TermDecl "One" $ Call "Succ" `App` Call "Zero"
-  , TermDecl "Two" $ Call "Succ" `App` Call "One"
-  , TermDecl "Three" $ Call "Succ" `App` Call "Two"
-  , TermDecl "Ifte" $ Lam "b" (One :+: One) $ Lam "n" (nat :&: nat) $ CasePlus (Var "b") "x" (Fst (Var "n")) "y" (Snd (Var "n"))
-  , TermDecl "Not" $ Lam "b" (One :+: One) $ CasePlus (Var "b") "x" (Inr One Star) "y" (Inl One Star)
-  , TermDecl "NANP" $ Lam "n" nat $ With (Var "n") $ Call "Succ" `App` Var "n"
-  , TermDecl "Main" $ Call "Ifte" `App` (Call "Not" `App` Inl One Star) `App` (Call "NANP" `App` Call "Two") -- Call "Plus" `App` Call "Two" `App` Call "Three"
-  ]
+import Parser
+import Latex
+import HVM (runtime)
 
 main :: IO ()
-main = runCheckSource source
+main = do
+  args <- getArgs
+  let process log latex exec args = case args of
+        "-v" : as -> process True log exec as
+        "-l" : as -> process log True exec as
+        "-e" : as -> process log latex True as
+        [file] -> run log latex exec file []
+        file : "-i" : is -> run log latex exec file is
+        _ -> putStrLn "Usage: asphalt [OPTIONS] file [-i interface1 interface2 ...]\nOptions: -l for latex, -v for log, -e for executable hvm file. -i to load interfaces."
+  process False False True args
+
+runtimeHVM :: Text
+runtimeHVM = $(runtime)
+
+run :: Bool -> Bool -> Bool -> String -> [String] -> IO ()
+run log latex exec file is = do
+  f <- T.readFile file
+  case parse parseSource file f of
+    Left e -> putStrLn (errorBundlePretty e) >> exitWith (ExitFailure 1)
+    Right source -> do
+      ihs <- forM is $ \nm -> do
+        f <- T.readFile nm
+        hvm <- T.readFile (replaceExtension file "hvmp")
+        case parse parseInterface nm f of
+          Left e -> putStrLn (errorBundlePretty e) >> exitWith (ExitFailure 1)
+          Right i -> return ((nm, i), hvm <> "\n")
+      let (is, hvms) = unzip ihs
+      let (log', latexes, eth) = runTypecheck is source
+      when latex $ putStrLn "Latex:\n" >> printText latexes
+      when log $ putStrLn "Log:\n" >> T.putStrLn log'
+      case eth of
+        Left e -> T.putStrLn e
+        Right (interface, src) -> do
+          T.writeFile (replaceExtension file "aphi") (text interface)
+          T.writeFile (replaceExtension file "hvmp") (text src)
+          when exec $ T.writeFile (replaceExtension file "hvm") (runtimeHVM <> mconcat hvms <> text src)

@@ -1,3 +1,3 @@
 ## asphalt
 
-Currently an affine type checker.
+A simple language with an affine type system.

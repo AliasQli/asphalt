@@ -1,5 +1,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Typecheck where
 
@@ -9,6 +10,8 @@ import Control.Monad.Writer
 import Data.List (intersect)
 import Data.Functor.Const
 import Control.Monad.Identity
+import Data.Text (Text)
+import qualified Data.Text as T
 
 import AST
 import Latex
@@ -46,7 +49,7 @@ modifies l f = modify (over l f)
 puts :: MonadState s m => Lens s a -> a -> m ()
 puts l a = modifies l (const a)
 
-type Typecheck = ExceptT String (WriterT String (WriterT [Latex] (State ([Synonym], [Typing], Context, Serial))))
+type Typecheck = ExceptT Text (WriterT Text (WriterT [Latex] (State ([Synonym], [Typing], Context, Serial))))
 
 serial :: Typecheck Serial
 serial = do
@@ -95,7 +98,7 @@ modSynonyms :: ([Synonym] -> [Synonym]) -> Typecheck ()
 modSynonyms = modifies _1
 
 tellJudgement :: Judgement -> Typecheck ()
-tellJudgement = tell . (<> "\n") . show
+tellJudgement = tell . (<> "\n") . text
 
 retFrac :: Frac -> Typecheck (Type, Frac)
 retFrac frac@(Frac _ j _) = do
@@ -121,7 +124,7 @@ checkWellType ty = do
   (tyN, k) <- normalizeType ty
   case k of
     Type -> pure ()
-    _ -> throwError $ "type mismatch: " <> show tyN <> " : " <> show k <> " is not of kind *"
+    _ -> throwError $ "type mismatch: " <> text tyN <> " : " <> text k <> " is not of kind *"
 
 isNFEqual :: Type -> Type -> Typecheck Bool
 isNFEqual ty1 ty2 = do
@@ -135,7 +138,7 @@ whnfType' vs ty = do
   synonyms <- getSynonyms
   case whnf synonyms vs ty of
     Just ty -> pure ty
-    Nothing -> throwError $ "type mismatch: " <> show ty <> " is a malformed type"
+    Nothing -> throwError $ "type mismatch: " <> text ty <> " is a malformed type"
 
 whnfType :: Type -> Typecheck Type
 whnfType = whnfType' []
@@ -157,7 +160,7 @@ maybeModalType ty = do
     _ -> pure Nothing
 
 locate :: AST -> Typecheck a -> Typecheck a
-locate ast action = catchError action (\e -> throwError (e <> "\nin " ++ show ast))
+locate ast action = catchError action (\e -> throwError (e <> "\nin " <> text ast))
 
 typecheck :: AST -> Typecheck (Type, Frac)
 typecheck ast@(Lam var ty body) = locate ast $ do
@@ -175,9 +178,9 @@ typecheck ast@(App f x) = locate ast $ do
   case fTyW of
     ty :->: ty' -> do
       b <- ty `isNFEqual` xTy
-      unless b $ throwError $ "type mismatch: can't apply " <> show f <> " : " <> show fTy <> " to " <> show x <> " : " <> show xTy
+      unless b $ throwError $ "type mismatch: can't apply " <> text f <> " : " <> text fTy <> " to " <> text x <> " : " <> text xTy
       retFrac $ Frac [fPremise, xPremise] (Judgement inc out ast ty') LolipopE
-    _ -> throwError $ "type mismatch: " <> show f <> " : " <> show fTy <> " is not of a function type"
+    _ -> throwError $ "type mismatch: " <> text f <> " : " <> text fTy <> " is not of a function type"
 typecheck ast@(Var var) = locate ast $ do
   inc <- getContext
   case filter (\(a, _, _) -> a == var) inc of
@@ -209,7 +212,7 @@ typecheck ast@(LetTensor a b t body) = locate ast $ do
       (ty, premise) <- withAddition a aTy $ withAddition b bTy $ typecheck body
       out <- getContext
       retFrac $ Frac [tPremise, premise] (Judgement inc out ast ty) TensorE
-    _ -> throwError $ "type mismatch: " <> show t <> " : " <> show tTy <> " is not of a tensor type"
+    _ -> throwError $ "type mismatch: " <> text t <> " : " <> text tTy <> " is not of a tensor type"
 typecheck ast@Star = locate ast $ do
   inc <- getContext
   let out = inc
@@ -244,8 +247,8 @@ typecheck ast@(CasePlus x a ma b mb) = locate ast $ do
       b <- maTy `isNFEqual` mbTy
       if b
         then retFrac $ Frac [premise, maPremise, mbPremise] (Judgement inc out ast (min maTy mbTy)) PlusE
-        else throwError $ "type mismatch: " <> show ma <> " : " <> show maTy <> " and " <> show mb <> " : " <> show mbTy <> " are not of the same type"
-    _ -> throwError $ "type mismatch: " <> show x <> " : " <> show xTy <> " is not of a sum type"
+        else throwError $ "type mismatch: " <> text ma <> " : " <> text maTy <> " and " <> text mb <> " : " <> text mbTy <> " are not of the same type"
+    _ -> throwError $ "type mismatch: " <> text x <> " : " <> text xTy <> " is not of a sum type"
 typecheck ast@(Absurd ty a) = locate ast $ do
   checkWellType ty
   inc <- getContext
@@ -255,7 +258,7 @@ typecheck ast@(Absurd ty a) = locate ast $ do
     Zero -> do
       out <- getContext
       retFrac $ Frac [premise] (Judgement inc out ast ty) ZeroE
-    _ -> throwError $ "type mismatch: " <> show a <> " : " <> show aTy <> " is not of type 0"
+    _ -> throwError $ "type mismatch: " <> text a <> " : " <> text aTy <> " is not of type 0"
 typecheck ast@(With a b) = locate ast $ do
   inc <- getContext
   (aTy, premise) <- typecheck a
@@ -274,7 +277,7 @@ typecheck ast@(Fst a) = locate ast $ do
     ty :&: _ -> do
       out <- getContext
       retFrac $ Frac [premise] (Judgement inc out ast ty) WithEL
-    _ -> throwError $ "type mismatch: " <> show a <> " : " <> show aTy <> " is not of a with type"
+    _ -> throwError $ "type mismatch: " <> text a <> " : " <> text aTy <> " is not of a with type"
 typecheck ast@(Snd a) = locate ast $ do
   inc <- getContext
   (aTy, premise) <- typecheck a
@@ -283,7 +286,7 @@ typecheck ast@(Snd a) = locate ast $ do
     _ :&: ty -> do
       out <- getContext
       retFrac $ Frac [premise] (Judgement inc out ast ty) WithER
-    _ -> throwError $ "type mismatch: " <> show a <> " : " <> show aTy <> " is not of a with type"
+    _ -> throwError $ "type mismatch: " <> text a <> " : " <> text aTy <> " is not of a with type"
 typecheck ast@(Fold ty body) = locate ast $ do
   checkWellType ty
   tyW <- whnfType ty
@@ -296,8 +299,8 @@ typecheck ast@(Fold ty body) = locate ast $ do
       b <- expanded `isNFEqual` tyBody
       if b
         then retFrac $ Frac [premise] (Judgement inc out ast ty) MuI
-        else throwError $ "type mismatch: " <> show body <> " : " <> show tyBody <> " is not of type " <> show expanded
-    _ -> throwError $ "type mismatch: " <> show ty <> " is not a recursive type"
+        else throwError $ "type mismatch: " <> text body <> " : " <> text tyBody <> " is not of type " <> text expanded
+    _ -> throwError $ "type mismatch: " <> text ty <> " is not a recursive type"
 typecheck ast@(Unfold body) = locate ast $ do
   inc <- getContext
   (ty, premise) <- typecheck body
@@ -307,7 +310,7 @@ typecheck ast@(Unfold body) = locate ast $ do
     Mu v t -> do
       let expanded = expand (Just ty) v t
       retFrac $ Frac [premise] (Judgement inc out ast expanded) MuE
-    _ -> throwError $ "type mismatch: " <> show ty <> " is not a recursive type"
+    _ -> throwError $ "type mismatch: " <> text ty <> " is not a recursive type"
 typecheck ast@(Fix v ty body) = locate ast $ do
   checkWellType ty
   maybeTy <- maybeModalType ty
@@ -323,9 +326,9 @@ typecheck ast@(Fix v ty body) = locate ast $ do
           b <- innerTy `isNFEqual` ty'
           if b
             then retFrac $ Frac [premise] (Judgement inc [] ast (min innerTy ty')) ByFix
-            else throwError $ "type mismatch: " <> show body <> " : " <> show ty' <> " is not of type " <> show innerTy
-        Just (v, t) -> throwError $ "type mismatch: current context contains non-modal type " <> v <> " : " <> show t
-    Nothing -> throwError $ "type mismatch: " <> show ty <> " is not a modal type"
+            else throwError $ "type mismatch: " <> text body <> " : " <> text ty' <> " is not of type " <> text innerTy
+        Just (v, t) -> throwError $ "type mismatch: current context contains non-modal type " <> v <> " : " <> text t
+    Nothing -> throwError $ "type mismatch: " <> text ty <> " is not a modal type"
 
 typecheckSource :: Source -> Typecheck Interface
 typecheckSource [] = pure []
@@ -335,7 +338,7 @@ typecheckSource (TypeDecl v ty : decls) = do
     Right (tyN, k) -> do
       let syn = (v, (ty, tyN, k))
       modSynonyms (syn :)
-      tell $ show syn <> "\n\n"
+      tell $ text syn <> "\n\n"
       tellLatex $ LatexSynonym syn
       ress <- typecheckSource decls
       pure $ TypeProto syn : ress
@@ -351,29 +354,29 @@ typecheckSource (TermDecl v ast : rest) = do
   ress <- typecheckSource rest
   pure $ TermProto typing : ress
 
--- runCheck :: AST -> IO ()
--- runCheck e = do
---   let (eth, log) = evalRWS (runExceptT (typecheck e)) () ([], [], [], 0)
---   putStrLn log
---   case eth of
---     Left err -> putStrLn ("Error: " <> err)
---     Right (t, frac) -> do
---       putStrLn $ show e <> " : " <> show t <> "\n"
---       putStrLn (showLatex frac)
+loadInterface :: Interface -> Typecheck ()
+loadInterface [] = pure ()
+loadInterface (TypeProto (nm, c) : rest) = do
+  syn <- getSynonyms
+  case lookup nm syn of
+    Just (ty, _, k) -> throwError $ "type " <> nm <> " is already defined: " <> nm <> " = " <> text ty <> " : " <> text k
+    Nothing -> do
+      modSynonyms ((nm, c) :)
+      loadInterface rest
+loadInterface (TermProto (nm, c) : rest) = do
+  typing <- getTypings
+  case lookup nm typing of
+    Just ty -> throwError $ nm <> "is already defined: " <> nm <> " : " <> text ty
+    Nothing -> do
+      modTypings ((nm, c) :)
+      loadInterface rest
 
-runCheckSource :: Source -> IO ()
-runCheckSource src = do
-  let ((eth, log), latexes) = evalState (runWriterT (runWriterT (runExceptT (typecheckSource src)))) ([], [], [], 0)
-  putStrLn "Code:\n"
-  print src
-  putStrLn "Log:\n"
-  putStrLn log
-  case eth of
-    Left err -> putStrLn ("Error: " <> err)
-    Right interface -> do
-      putStrLn "Latex:\n"
-      print latexes
-      putStrLn "Interface:\n"
-      print interface
-      putStrLn "HVM:\n"
-      print $ traslateSrc src
+runTypecheck :: [(String, Interface)] -> Source -> (Text, [Latex], Either Text (Interface, HVMSrc))
+runTypecheck is src =
+  let runner f = evalState (runWriterT (runWriterT (runExceptT f))) ([], [], [], 0)
+      ((eth, log), latexes) = runner $ do
+        forM_ is $ \(nm, i) -> do
+          catchError (loadInterface i) $ \e ->
+            throwError $ e <> ", in interface " <> T.pack nm
+        typecheckSource src
+  in (log, latexes, (,translateSrc src) <$> eth)
