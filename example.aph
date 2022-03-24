@@ -1,12 +1,19 @@
 -- This code calculates 2 + 3.
-type Nat = μ a. 1 ⊕ a
-type ! = λ (b : *). μ a. b ⊗ a
-Zero = fold Nat (inl Nat *)
-Succ = λ (x : Nat). fold Nat (inr 1 x)
-One = Succ Zero
-Two = Succ One
-Three = Succ Two
-Pred = λ (x : Nat). case unfold x of inl s -> Zero; inr n -> n
-Zeros = fix (p : ! (! Nat)). let q ⊗ r = unfold p in fold (! Nat) (Zero ⊗ q)
-Plus = fix (p : ! (Nat ⊸ Nat ⊸ Nat)). λ (x : Nat). λ (y : Nat). case unfold x of inl s -> y; inr n -> let rec ⊗ q = unfold p in Succ (rec n y)
-Main = Plus Two Three
+type Nat = μ a. 1 ⊕ a;
+
+type ! = λ (b : *). μ a. b ⊗ a;
+
+Zero = fold Nat (inl tt);
+Succ = λ x. fold Nat (inr x);
+
+One = Succ Zero;
+Two = Succ One;
+Three = Succ Two;
+
+Pred = λ x. case unfold Nat x of inl s -> Zero | inr n -> n;
+
+Zeros = fix p. let q ⊗ r = unfold _ p in fold (! Nat) (Zero ⊗ q);
+
+Plus = fix p. λ x. λ y. case unfold Nat x of inl s -> y | inr n -> let rec ⊗ q = unfold _ p in Succ (rec n y);
+
+Main = Plus Two Three;

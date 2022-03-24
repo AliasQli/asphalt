@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module HVM where
 
@@ -11,16 +11,16 @@ import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
 import qualified Data.Text.IO as T
 
-import AST
+import Data
 import Latex
 
 type CtorName = Text
 type VarName = Text
 
-newtype HVMSrc = HVMSrc [HVM]
+type HVMSrc = [HVM]
 
 instance ShowText HVMSrc where
-  text (HVMSrc hvms) = T.unlines $ map text hvms
+  text hvms = T.unlines $ map text hvms
 
 data HVM = LHS := RHS
 
@@ -108,29 +108,32 @@ fix :: VarName -> RHS -> RHS
 fix p b = call "Fix" `apply` [Lambda p b]
 
 translate :: AST -> RHS
-translate (Lam s _ ast) = Lambda s (translate ast)
+translate (Lam s ast) = Lambda s (translate ast)
 translate (App ast1 ast2) = translate ast1 `app` translate ast2
 translate (Var s) = var s
 translate (Call s) = call s
 translate (Tensor ast1 ast2) = tensor (translate ast1) (translate ast2)
 translate (LetTensor a b ast ast2) = letTensor a b (translate ast) (translate ast2)
-translate Star = unit
-translate (Inl _ ast) = inl (translate ast)
-translate (Inr _ ast) = inr (translate ast)
+translate Unit = unit
+translate (Inl ast) = inl (translate ast)
+translate (Inr ast) = inr (translate ast)
 translate (CasePlus x w1 m1 w2 m2) = casePlus (translate x) w1 (translate m1) w2 (translate m2)
-translate (Absurd _ ast) = absurd (translate ast)
+translate (Absurd ast) = absurd (translate ast)
 translate (With ast1 ast2) = with (translate ast1) (translate ast2)
 translate (Fst ast) = fst (translate ast)
 translate (Snd ast) = snd (translate ast)
 translate (Fold _ ast) = fold (translate ast)
 translate (Unfold ast) = unfold (translate ast)
-translate (Fix p _ ast) = fix p (translate ast)
+translate (Unfold' _ ast) = translate (Unfold ast)
+translate (Fix p ast) = fix p (translate ast)
 
 translateSrc :: Source -> HVMSrc
-translateSrc = HVMSrc . mapMaybe f
+translateSrc = mapMaybe f
   where
     f (TypeDecl _ _) = Nothing
+    f (DataDecl _ _) = Nothing
     f (TermDecl nm ast) = Just $ term nm := translate ast
+    f (TermDeclTyped nm ast _) = Just $ term nm := translate ast
 
 runtime :: ExpQ
 runtime = do

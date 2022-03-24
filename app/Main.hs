@@ -11,7 +11,7 @@ import System.Exit
 import System.FilePath
 import Data.Text (Text)
 
-import Typecheck
+import AST
 import Parser
 import Latex
 import HVM (runtime)
@@ -26,7 +26,7 @@ main = do
         [file] -> run log latex exec file []
         file : "-i" : is -> run log latex exec file is
         _ -> putStrLn "Usage: asphalt [OPTIONS] file [-i interface1 interface2 ...]\nOptions: -l for latex, -v for log, -e for executable hvm file. -i to load interfaces."
-  process False False True args
+  process False False False args
 
 runtimeHVM :: Text
 runtimeHVM = $(runtime)
@@ -44,12 +44,12 @@ run log latex exec file is = do
           Left e -> putStrLn (errorBundlePretty e) >> exitWith (ExitFailure 1)
           Right i -> return ((nm, i), hvm <> "\n")
       let (is, hvms) = unzip ihs
-      let (log', latexes, eth) = runTypecheck is source
-      when latex $ putStrLn "Latex:\n" >> printText latexes
+      let (log', eth) = runCheckSource is source
       when log $ putStrLn "Log:\n" >> T.putStrLn log'
       case eth of
         Left e -> T.putStrLn e
-        Right (interface, src) -> do
+        Right (interface, src, latexes) -> do
+          when latex $ putStrLn "Latex:\n" >> printText latexes
           T.writeFile (replaceExtension file "aphi") (text interface)
           T.writeFile (replaceExtension file "hvmp") (text src)
           when exec $ T.writeFile (replaceExtension file "hvm") (runtimeHVM <> mconcat hvms <> text src)

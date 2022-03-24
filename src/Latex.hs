@@ -5,6 +5,7 @@
 module Latex where
 import Data.Text (Text)
 import qualified Data.Text.IO as T
+import qualified Data.Text as T
 type TextS = Text -> Text
 
 class ShowText a where
@@ -76,3 +77,6 @@ instance ShowLatex By where
   showLatex MuE = "\\mu \\text{E}"
   showLatex ByFix = "\\text{fix}"
   showLatex Nil = ""
+
+instance ShowText Integer where
+  text = T.pack . show

@@ -1,201 +1,350 @@
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
+{-# OPTIONS_GHC -Wno-type-defaults #-}
+{-# OPTIONS_GHC -Wno-partial-type-signatures #-}
 
-module AST (module AST, module Type) where
+module AST where
 
 import Data.Text (Text)
+import qualified Data.Map as Map
+import qualified Data.Set as Set
+import Data.Bifunctor
+import Control.Effect.Reader
+import Control.Effect.Error
+import Control.Effect.State
 import qualified Data.Text as T
+import Control.Carrier.State.Strict
+import Control.Carrier.Reader
+import Control.Carrier.Error.Either
+import Data.Functor.Identity
+import Control.Monad
+import Data.Foldable
+import Control.Carrier.Writer.Strict
 
 import Latex
 import Type
+import Data
+import HVM hiding (fold)
 
-data AST
-  = Lam Var Type AST              -- λ (Var : Type). AST
-  | App AST AST                   -- AST AST
-  | Var Var                       -- Var
-  | Call Name                     -- Name
-  | Tensor AST AST                -- AST * AST
-  | LetTensor Var Var AST AST     -- let Var * Var = AST in AST
-  | Star                          -- *
-  | Inl Type AST                  -- inl Type AST
-  | Inr Type AST                  -- inr Type AST
-  | CasePlus AST Var AST Var AST  -- case AST of inl Var -> AST; inr Var -> AST
-  | Absurd Type AST               -- absurd Type AST
-  | With AST AST                  -- AST & AST
-  | Fst AST                       -- fst AST
-  | Snd AST                       -- snd AST
-  | Fold Type AST                 -- fold Type AST
-  | Unfold AST                    -- unfold AST
-  | Fix Var Type AST              -- fix (Var : Type). AST
-  deriving Show
+default (Text)
 
-instance ShowText AST where
-  textPrec d (Lam v t e) = showTextParen (d > 1) $
-    showText "λ (" . showText v . showText " : " . textPrec 0 t . showText "). " . textPrec 0 e
-  textPrec d (App e1 e2) = showTextParen (d > 10) $
-    textPrec 10 e1 . showText " " . textPrec 11 e2
-  textPrec _ (Var v) = showText v
-  textPrec _ (Call c) = showText c
-  textPrec d (Tensor e1 e2) = showTextParen (d > 4) $
-    textPrec 5 e1 . showText " ⊗ " . textPrec 5 e2
-  textPrec d (LetTensor v1 v2 e1 e2) = showTextParen (d > 1) $
-    showText "let " . showText v1 . showText " ⊗ " . showText v2 . showText " = " . textPrec 0 e1 . showText " in " . textPrec 0 e2
-  textPrec _ Star = showText "*"
-  textPrec d (Inl ty e1) = showTextParen (d > 10) $
-    showText "inl " . textPrec 11 ty . showText " " . textPrec 11 e1
-  textPrec d (Inr ty e1) = showTextParen (d > 10) $
-    showText "inr " . textPrec 11 ty . showText " " . textPrec 11 e1
-  textPrec d (CasePlus e1 v1 e2 v2 e3) = showTextParen (d > 0) $
-    showText "case " . textPrec 3 e1 . showText " of \
-    \inl " . showText v1 . showText " -> " . textPrec 1 e2 . showText "; \
-    \inr " . showText v2 . showText " -> " . textPrec 1 e3
-  textPrec d (Absurd ty e1) = showTextParen (d > 10) $
-    showText "absurd " . textPrec 11 ty . showText " " . textPrec 11 e1
-  textPrec d (With e1 e2) = showTextParen (d > 4) $
-    textPrec 5 e1 . showText " & " . textPrec 5 e2
-  textPrec d (Fst e1) = showTextParen (d > 10) $
-    showText "fst " . textPrec 11 e1
-  textPrec d (Snd e1) = showTextParen (d > 10) $
-    showText "snd " . textPrec 11 e1
-  textPrec d (Fold ty body) = showTextParen (d > 10) $
-    showText "fold " . textPrec 11 ty . showText " " . textPrec 11 body
-  textPrec d (Unfold body) = showTextParen (d > 10) $
-    showText "unfold " . textPrec 11 body
-  textPrec d (Fix v ty body) = showTextParen (d > 1) $
-    showText "fix (" . showText v . showText " : " . textPrec 0 ty . showText "). " . textPrec 0 body
+inTerm :: Has (Error Text) sig m => AST -> m a -> m a
+inTerm ast = locate $ "\nIn " <> text ast
 
--- instance Show AST where
---   show = T.unpack . text
+serial :: Has (State Integer) sig m => m Integer
+serial = do
+  i <- get
+  put (i + 1)
+  pure i
 
-instance ShowLatex AST where
-  showsLatexPrec d (Lam v t e) = showTextParen (d > 1) $
-    showText "\\lambda (" . showText v . showText " : " . showsLatexPrec 0 t . showText "). \\space " . showsLatexPrec 0 e
-  showsLatexPrec d (App e1 e2) = showTextParen (d > 10) $
-    showsLatexPrec 10 e1 . showText " \\space " . showsLatexPrec 11 e2
-  showsLatexPrec _ (Var v) = showText v
-  showsLatexPrec _ (Call c) = showText "\\text{" . showText c . showText "}"
-  showsLatexPrec d (Tensor e1 e2) = showTextParen (d > 4) $
-    showsLatexPrec 5 e1 . showText " \\otimes " . showsLatexPrec 5 e2
-  showsLatexPrec d (LetTensor v1 v2 e1 e2) = showTextParen (d > 1) $
-    showText "\\text{let } " . showText v1 . showText " \\otimes " . showText v2 . showText " = " . showsLatexPrec 0 e1 .
-    showText " \\text{ in } " . showsLatexPrec 0 e2
-  showsLatexPrec _ Star = showText "*"
-  showsLatexPrec d (Inl ty e1) = showTextParen (d > 10) $
-    showText "\\text{inl} ^{" . textPrec 11 ty . showText "} \\space " . showsLatexPrec 11 e1
-  showsLatexPrec d (Inr ty e1) = showTextParen (d > 10) $
-    showText "\\text{inr} ^{" . textPrec 11 ty . showText "} \\space "  . showsLatexPrec 11 e1
-  showsLatexPrec d (CasePlus e1 v1 e2 v2 e3) = showTextParen (d > 0) $
-    showText "\\text{case } " . showsLatexPrec 3 e1 . showText " \\text{ of \
-    \inl } " . showText v1 . showText " \\to " . showsLatexPrec 1 e2 . showText "\\text{; \
-    \inr } " . showText v2 . showText " \\to " . showsLatexPrec 0 e3
-  showsLatexPrec d (Absurd ty e1) = showTextParen (d > 10) $
-    showText "\\text{absurd} ^{" . textPrec 11 ty . showText "} \\space " . showsLatexPrec 11 e1
-  showsLatexPrec d (With e1 e2) = showTextParen (d > 4) $
-    showsLatexPrec 5 e1 . showText " \\& " . showsLatexPrec 5 e2
-  showsLatexPrec d (Fst e1) = showTextParen (d > 10) $
-    showText "\\text{fst } " . showsLatexPrec 11 e1
-  showsLatexPrec d (Snd e1) = showTextParen (d > 10) $
-    showText "\\text{snd } " . showsLatexPrec 11 e1
-  showsLatexPrec d (Fold ty body) = showTextParen (d > 10) $
-    showText "\\text{fold} ^{" . textPrec 11 ty . showText "} \\space " . showsLatexPrec 11 body
-  showsLatexPrec d (Unfold body) = showTextParen (d > 10) $
-    showText "\\text{unfold } " . showsLatexPrec 11 body
-  showsLatexPrec d (Fix v ty body) = showTextParen (d > 1) $
-    showText "\\text{fix } (" . showText v . showText " : " . showsLatexPrec 0 ty . showText "). \\space  " . showsLatexPrec 0 body
+newvar :: Has (State Integer) sig m => m (Integer, Type)
+newvar = do
+  n <- get @Integer
+  put (n + 1)
+  pure (n, TVar $ "t" <> text n)
 
-type Serial = Integer
+strip :: Eq b => b -> [(a, b, c)] -> [(a, b, c)]
+strip v = filter ((/= v) . mid)
 
-type Context = [(Var, Integer, Type)]
+intercalate :: Eq b => [(a, b, c)] -> [(a, b, c)] -> [(a, b, c)]
+intercalate [] _ = []
+intercalate (x:xs) ys = if any ((== mid x) . mid) ys
+  then x : intercalate xs ys
+  else intercalate xs ys
 
-instance ShowText Context where
-  text [] = "⋅"
-  text [(v, _, t)] = v <> " : " <> text t
-  text ((v, _, t) : ctx) = text ctx <> ", " <> v <> " : " <> text t
+data Frac'
+  = Frac' [Frac] Type By
+  | FracIntro' Typing Type
 
-instance ShowLatex Context where
-  showLatex = go []
-    where
-      underline v vs = if v `elem` vs
-        then \x -> "\\underline{" <> x <> "}"
-        else id
-      go _ [] = "\\cdot"
-      go vs [(v, _, t)] = underline v vs $ v <> " : " <> showLatex t
-      go vs ((v, _, t) : ctx) = underline v vs $ go (v:vs) ctx <> ", " <> v <> " : " <> showLatex t
+retFrac' :: Applicative m => Substitution -> Frac' -> m (Substitution, Frac')
+retFrac' s (Frac' fracs ty by) = pure (s, Frac' fracs ty by)
+retFrac' s (FracIntro' typing ty) = pure (s, FracIntro' typing ty)
 
-showLatexContextSimple :: Context -> Text
-showLatexContextSimple [] = "\\cdot"
-showLatexContextSimple [(v, _, _)] = v
-showLatexContextSimple ((v, _, _) : ctx) = showLatexContextSimple ctx <> ", " <> v
+toFrac :: (Has (Writer Text) sig m, Has (State Context) sig m) => AST -> m (Substitution, Frac') -> m (Type, Substitution, Frac)
+toFrac ast m = do
+  inc <- get @Context
+  (s, frac') <- m
+  out <- get @Context
+  case frac' of
+    Frac' fracs ty by -> do
+      let j = Judgement (subst s inc) (subst s out) ast (subst s ty)
+      tell $ text j <> "\n"
+      pure (ty, s, Frac fracs j by)
+    FracIntro' typing ty -> do
+      let j = Judgement (subst s inc) (subst s out) ast (subst s ty)
+      tell $ text j <> "\n"
+      pure (ty, s, FracIntro typing j)
 
-data Decl
-  = TypeDecl Name Type
-  | TermDecl Name AST
-  deriving Show
+typeinfer ::
+  ( Has (State Integer) sig m
+  , Has (Error Text) sig m
+  , Has (Reader [Synonym]) sig m
+  , Has (Reader [Typing]) sig m
+  , Has (State Context) sig m
+  , Has (Writer Text) sig m
+  ) => AST -> m (Type, Substitution, Frac)
+typeinfer ast@(Lam v body) = inTerm ast $ toFrac ast $ do
+  (i, t) <- newvar
+  modify @Context ((v, i, t) :)
+  (ty, s, premise) <- typeinfer body
+  modify @Context (strip i)
+  retFrac' s $ Frac' [premise] (subst s t :-> ty) LolipopI
+typeinfer ast@(App e1 e2) = inTerm ast $ toFrac ast $ do
+  (t1, s1, fPremise) <- typeinfer e1
 
-instance ShowText Decl where
-  text (TypeDecl v ty) = "type " <> v <> " = " <> text ty
-  text (TermDecl v e) = v <> " = " <> text e
+  modify @Context (subst s1)
+  (t2, s2, xPremise) <- typeinfer e2
 
-type Source = [Decl]
+  (_, t) <- newvar
+  s3 <- unify t1 (t2 :-> t)
+  retFrac' (s3 <> s2 <> s1) $ Frac' [fPremise, xPremise] (subst s3 t) LolipopI
+typeinfer ast@(Var v) = inTerm ast $ toFrac ast $ do
+  ctx <- get @Context
+  case lookup' v ctx of
+    Just (i, t) -> do
+      modify @Context (strip i)
+      retFrac' mempty $ Frac' [] t Nil
+    Nothing -> throwError $ "Unbound variable: " <> v
+typeinfer ast@(Call nm) = inTerm ast $ toFrac ast $ do
+  syns <- ask @[(Name, Type)]
+  case lookup nm syns of
+    Just t -> do
+      let f = Set.toList $ free t
+      s <- fmap Map.fromList . forM f $ \v -> do
+        (_, t) <- newvar
+        pure (v, t)
+      retFrac' mempty $ FracIntro' (nm, t) (subst s t)
+    Nothing -> throwError $ "Unbound function: " <> nm
+typeinfer ast@(Tensor e1 e2) = inTerm ast $ toFrac ast $ do
+  (t1, s1, aPremise) <- typeinfer e1
 
-instance ShowText Source where
-  text decls = T.unlines (text <$> decls)
+  modify @Context (subst s1)
+  (t2, s2, bPremise) <- typeinfer e2
 
-type Typing = (Var, Type)
+  retFrac' (s2 <> s1) $ Frac' [aPremise, bPremise] (t1 :*: t2) TensorI
+typeinfer ast@(LetTensor v1 v2 e1 e2) = inTerm ast $ toFrac ast $ do
+  (t1, s1, premise1) <- typeinfer e1
 
-instance ShowText Typing where
-  text (name, ty) = name <> " : " <> text ty
+  (ia, ta) <- newvar
+  (ib, tb) <- newvar
+  s' <- unify t1 (ta :*: tb)
 
-instance ShowLatex Typing where
-  showLatex (name, ty) = "\\text{" <> name <> "} : " <> showLatex ty
+  modify @Context $ ((v1, ia, subst s' ta) :) . ((v2, ib, subst s' tb) :) . subst s1
+  (t2, s2, premise2) <- typeinfer e2
+  modify @Context $ strip ia . strip ib
 
-data Prototype
-  = TypeProto Synonym
-  | TermProto Typing
+  retFrac' (s2 <> s' <> s1) $ Frac' [premise1, premise2] t2 TensorE
+typeinfer ast@(Inl e) = inTerm ast $ toFrac ast $ do
+  (t, s, premise) <- typeinfer e
+  (_, t1) <- newvar
+  retFrac' s $ Frac' [premise] (t :+: t1) PlusIL
+typeinfer ast@(Inr e) = inTerm ast $ toFrac ast $ do
+  (t, s, premise) <- typeinfer e
+  (_, t1) <- newvar
+  retFrac' s $ Frac' [premise] (t1 :+: t) PlusIR
+typeinfer ast@(CasePlus e0 v1 e1 v2 e2) = inTerm ast $ toFrac ast $ do
+  (t, s0, premise0) <- typeinfer e0
+  modify @Context (subst s0)
+  ctx <- get @Context
 
-instance ShowText Prototype where
-  text (TypeProto syn) = text syn
-  text (TermProto typing) = text typing
+  (ia, ta) <- newvar
+  (ib, tb) <- newvar
+  s' <- unify t (ta :+: tb)
 
-type Interface = [Prototype]
+  modify @Context ((v1, ia, subst s' ta) :)
+  (t1, s1, premise1) <- typeinfer e1
+  modify @Context (strip ia)
+  ctx1 <- get @Context
 
-instance ShowText Interface where
-  text protos = T.unlines (text <$> protos)
+  put @Context ctx
+  modify @Context $ subst s1 . ((v2, ib, subst s' tb) :)
+  (t2, s2, premise2) <- typeinfer e2
+  modify @Context (strip ib)
+  ctx2 <- get @Context
 
-instance {-# Overlapping #-} Show Interface where
-  show = T.unpack . text
+  put @Context (intercalate ctx1 ctx2)
 
-data Judgement
-  = Judgement
-    { inc  :: Context
-    , out  :: Context
-    , expr :: AST
-    , ty   :: Type
-    }
+  s3 <- unify t1 t2
+  retFrac' (s3 <> s2 <> s1 <> s' <> s0) $ Frac' [premise0, premise1, premise2] (subst s3 (min t1 t2)) PlusE
+typeinfer ast@(With e0 e1) = inTerm ast $ toFrac ast $ do
+  ctx <- get @Context
+  (t0, s0, premise0) <- typeinfer e0
+  ctx1 <- get @Context
 
-instance ShowText Judgement where
-  text (Judgement inc out expr ty) = text inc <> " \\ " <> text out <> " |- " <> text expr <> " : " <> text ty
+  put @Context $ subst s0 ctx
+  (t1, s1, premise1) <- typeinfer e1
+  ctx2 <- get @Context
 
-instance ShowLatex Judgement where
-  showLatex (Judgement inc out expr ty) =
-    showLatex inc <> " \\backslash " <> showLatexContextSimple out <> " \\vdash " <> showLatex expr <> " : " <> showLatex ty
+  put @Context $ ctx1 `intercalate` ctx2
+  retFrac' (s1 <> s0) $ Frac' [premise0, premise1] (t0 :&: t1) WithI
+typeinfer ast@(Fst e) = inTerm ast $ toFrac ast $ do
+  (t, s, premise) <- typeinfer e
+  (_, t1) <- newvar
+  (_, t2) <- newvar
+  s' <- unify t (t1 :&: t2)
+  retFrac' (s' <> s) $ Frac' [premise] (subst s' t1) WithEL
+typeinfer ast@(Snd e) = inTerm ast $ toFrac ast $ do
+  (t, s, premise) <- typeinfer e
+  (_, t1) <- newvar
+  (_, t2) <- newvar
+  s' <- unify t (t1 :&: t2)
+  retFrac' (s' <> s) $ Frac' [premise] (subst s' t2) WithER
+typeinfer ast@Unit = inTerm ast $ toFrac ast $ do
+  retFrac' mempty $ Frac' [] One OneI
+typeinfer ast@(Absurd e) = inTerm ast $ toFrac ast $ do
+  (t, s, premise) <- typeinfer e
+  s' <- unify t Zero
+  (_, t1) <- newvar
+  retFrac' (s' <> s) $ Frac' [premise] t1 ZeroE
+typeinfer ast@(Fold t e) = inTerm ast $ toFrac ast $ do
+  openKindIsType t
+  tN <- whnf t
+  case tN of
+    TMu v t1 -> do
+      let t' = subst (Map.singleton v t) t1
+      (t2, s, premise) <- typeinfer e
+      s' <- unifyTo t2 t'
+      retFrac' (s' <> s) $ Frac' [premise] (subst s' t) MuI
+    _ -> throwError "cannot fold to a non-recursive type"
+typeinfer ast@(Unfold e) = inTerm ast $ toFrac ast $ do
+  (t, s, premise) <- typeinfer e
+  tN <- whnf t
+  case tN of
+    TMu v t1 -> do
+      let t' = subst (Map.singleton v t) t1
+      retFrac' s $ Frac' [premise] t' MuE
+    TVar _ -> throwError "cannot unfold a type variable, please use type annotation"
+    _ -> throwError "cannot unfold a non-recursive type"
+typeinfer ast@(Unfold' t e) = inTerm ast $ toFrac ast $ do
+  openKindIsType t
+  tN <- whnf t
+  case tN of
+    TMu v t1 -> do
+      let t' = subst (Map.singleton v t) t1
+      (t2, s, premise) <- typeinfer e
+      s' <- unifyTo t2 t
+      retFrac' (s' <> s) $ Frac' [premise] (subst s' t') MuE
+    _ -> throwError "cannot unfold a non-recursive type"
+typeinfer ast@(Fix v body) = inTerm ast $ toFrac ast $ do
+  ctx <- get @Context
+  s0 <- fmap fold . forM ctx $ \(_, _, t) -> do
+    (_, t1) <- newvar
+    unify t (TMu "a" (t1 :*: TVar "a"))
+  modify @Context (subst s0)
 
-data Frac
-  = Frac [Frac] Judgement By
-  | FracIntro Typing Judgement
+  (i, t) <- newvar
+  modify @Context ((v, i, TMu "a" (t :*: TVar "a")) :)
+  (ty, s, premise) <- typeinfer body
+  modify @Context (strip i)
 
-instance ShowLatex Frac where
-  showLatex (Frac l j by) = "\\displaystyle \\frac {" <> T.intercalate "\\qquad" (showLatex <$> l) <> "} {" <> showLatex j <> "} " <> showLatex by
-  showLatex (FracIntro typing j) = "\\displaystyle \\frac {" <> showLatex typing <> "} {" <> showLatex j <> "} \\text{intro}"
+  s' <- unify ty t
+  retFrac' (s' <> s <> s0) $ Frac' [premise] (subst s' ty) ByFix
 
-data Latex
-  = LatexFrac Frac
-  | LatexSynonym Synonym
+typecheck ::
+  ( Has (State Integer) sig m
+  , Has (Error Text) sig m
+  , Has (Reader [Synonym]) sig m
+  , Has (Reader [Typing]) sig m
+  , Has (State Context) sig m
+  , Has (Writer Text) sig m
+  ) => Type -> AST -> m (Substitution, Frac)
+typecheck ty ast = do
+  (ty', s, f) <- typeinfer ast
+  s' <- unifyTo ty' ty
+  pure (s' <> s, f)
 
-instance ShowLatex Latex where
-  showLatex (LatexFrac frac) = showLatex frac
-  showLatex (LatexSynonym syn) = showLatex syn
+checkNameUnique ::
+  ( Has (Error Text) sig m
+  , Has (Reader [Typing]) sig m
+  ) => Name -> m ()
+checkNameUnique name = do
+  typings <- ask @[Typing]
+  case lookup name typings of
+    Nothing -> pure ()
+    Just _ -> throwError $ "term " <> name <> " is already defined"
 
-instance ShowText [Latex] where
-  text = T.unlines . fmap ((<> " \\newline") . showLatex)
+checkTypeNameUnique ::
+  ( Has (Error Text) sig m
+  , Has (Reader [Synonym]) sig m
+  ) => Name -> m ()
+checkTypeNameUnique name = do
+  synonyms <- ask @[Synonym]
+  case lookup name synonyms of
+    Nothing -> pure ()
+    Just _ -> throwError $ "type " <> name <> " is already defined"
+
+inDef :: Has (Error Text) sig m => Name -> m a -> m a
+inDef name = locate $ "\nIn the definition of " <> name
+
+checkSource ::
+  ( Has (State Integer) sig m
+  , Has (Error Text) sig m
+  , Has (Reader [Synonym]) sig m
+  , Has (Reader [Typing]) sig m
+  , Has (State Context) sig m
+  , Has (Writer Text) sig m
+  ) => Source -> m (Interface, [Latex])
+checkSource [] = pure ([], [])
+checkSource (TypeDecl nm ty : s) = do
+  k <- inDef nm $ do
+    checkTypeNameUnique nm
+    closedKind ty
+  let syn = (nm, Syn ty k)
+  (is, ls) <- local @[Synonym] (syn :) $ checkSource s
+  pure (SynProto syn : is, LatexSynonym syn : ls)
+checkSource (DataDecl nm k : s) = do
+  inDef nm $ checkTypeNameUnique nm
+  let syn = (nm, Data k)
+  (is, ls) <- local @[Synonym] (syn :) $ checkSource s
+  pure (SynProto syn : is, LatexSynonym syn : ls)
+checkSource (TermDecl nm ast : s) = do
+  (ty, _, f) <- inDef nm $ do
+    checkNameUnique nm
+    put @Integer 0
+    typeinfer ast
+  (is, ls) <- local @[Typing] ((nm, ty) :) $ checkSource s
+  pure (TermProto (nm, ty) : is, LatexFrac nm f : ls)
+checkSource (TermDeclTyped nm ast ty : s) = do
+  (_, f) <- inDef nm $ do
+    checkNameUnique nm
+    put @Integer 0
+    typecheck ty ast
+  (is, ls) <- local @[Typing] ((nm, ty) :) $ checkSource s
+  pure (TermProto (nm, ty) : is, LatexFrac nm f : ls)
+
+inInterface :: Has (Error Text) sig m => String -> m a -> m a
+inInterface name = locate $ "\nIn the interface file " <> T.pack name
+
+loadInterface
+  :: ( Has (Reader [Synonym]) sig m
+     , Has (Reader [Typing]) sig m
+     , Has (Error Text) sig m
+     )
+  => String -> Interface -> m a -> m a
+loadInterface _ [] m = m
+loadInterface s (SynProto syn@(nm, _) : is) m = do
+  inInterface s $ checkTypeNameUnique nm
+  local @[Synonym] (syn :) $ loadInterface s is m
+loadInterface s (TermProto (nm, ty) : is) m = do
+  inInterface s $ checkNameUnique nm
+  local @[Typing] ((nm, ty) :) $ loadInterface s is m
+
+runTypeinfer
+  :: [Synonym]
+  -> [Typing]
+  -> ErrorC Text (ReaderC [Synonym] (ReaderC [Typing] (StateC Context (StateC Integer (WriterC Text Identity))))) a
+  -> (Text, Either Text a)
+runTypeinfer ss ts =
+  run .
+  runWriter .
+  evalState 0 .
+  evalState [] .
+  runReader ts .
+  runReader ss .
+  runError
+
+runCheckSource
+  :: [(String, Interface)]
+  -> Source
+  -> (Text, Either Text (Interface, HVMSrc, [Latex]))
+runCheckSource sis src = second (second (\(a, b) -> (a, translateSrc src, b))) $ runTypeinfer [] [] (foldr (uncurry loadInterface) (checkSource src) sis)

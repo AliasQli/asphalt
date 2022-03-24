@@ -1,6 +1,6 @@
 cabal-version:      2.4
 name:               asphalt
-version:            0.1.0
+version:            0.2.0
 author:             Alias Qli
 maintainer:         2576814881@qq.com
 copyright:          2022 Alias Qli
@@ -10,11 +10,11 @@ extra-source-files: CHANGELOG.md
 library
   exposed-modules: 
       AST
-    , Typecheck
     , Latex
     , HVM
     , Type
     , Parser
+    , Data
   hs-source-dirs:
     src
   ghc-options: 
@@ -32,6 +32,8 @@ library
     , megaparsec       >= 9.2 && < 9.3
     , text             >= 1.2 && < 1.3
     , template-haskell >= 2 && < 3
+    , containers
+    , fused-effects
   default-language: Haskell2010
 
 executable asphalt

@@ -1,217 +1,213 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS_GHC -Wno-partial-type-signatures #-}
+{-# OPTIONS_GHC -Wno-type-defaults #-}
 
 module Type where
 
-import Latex
-import Control.Monad
 import Data.Text (Text)
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
+import Data.Bifunctor
+import Control.Effect.Reader
+import Control.Effect.Error
+import Data.Maybe
+import qualified Data.Text as T
 
-type Var = Text
-type Name = Text
+import Data
+import Latex
 
-data Kind
-  = Type
-  | Kind :->> Kind
-  deriving (Eq, Show)
+default (Text)
 
-instance ShowText Kind where
-  textPrec _ Type = showText "*"
-  textPrec d (a :->> b) = showTextParen (d > 5) $ textPrec 6 a . showText " -> " . textPrec 5 b
+data Exception
+  = TypeException Name TypeException
+  | TermException Name TermException
 
-instance ShowLatex Kind where
-  showsLatexPrec _ Type = showText "*"
-  showsLatexPrec d (a :->> b) = showTextParen (d > 5) $ showsLatexPrec 6 a . showText " \\to " . showsLatexPrec 5 b
+data TypeException
+  = InType Type TypeException
+  | TypeFuncCantApply Type Kind Type Kind
+  | NoTypeFunction Type Kind
+  | UnboundTypeVar Var
+  | TypeNameNotFound Name
+  | KindNotType Type Kind
 
-data Type
-  = One
-  | Zero
-  | TypeVar Var
-  | TypeCall Name
-  | Type :->: Type
-  | Type :*: Type
-  | Type :+: Type
-  | Type :&: Type
-  | Mu Var Type
-  | TypeLam Var Kind Type
-  | Type :.: Type
-  deriving (Show)
-infixr 5 :->:
-infix 7 :*:
-infix 6 :+:
-infix 7 :&:
+data TermException
+  = InTerm AST TermException
+  | EmbedTypeException TypeException
+  | UnifyTooGeneral Type Var
+  | OccursCheck Var Type
+  | CantUnify Type Type
 
-instance ShowText Type where
-  textPrec _ One = showText "1"
-  textPrec _ Zero = showText "0"
-  textPrec _ (TypeVar v) = showText v
-  textPrec _ (TypeCall n) = showText n
-  textPrec d (t1 :->: t2) = showTextParen (d > 5) $ textPrec 6 t1 . showText " ⊸ " . textPrec 5 t2
-  textPrec d (t1 :*: t2)  = showTextParen (d > 7) $ textPrec 8 t1 . showText " ⊗ " . textPrec 8 t2
-  textPrec d (t1 :+: t2)  = showTextParen (d > 6) $ textPrec 7 t1 . showText " ⊕ " . textPrec 7 t2
-  textPrec d (t1 :&: t2)  = showTextParen (d > 7) $ textPrec 8 t1 . showText " & " . textPrec 8 t2
-  textPrec d (Mu v t) = showTextParen (d > 1) $ showText "μ " . showText v . showText ". " . textPrec 1 t
-  textPrec d (TypeLam v k t2) = showTextParen (d > 1) $ showText "λ (" . showText v . showText " : " . textPrec 0 k . showText "). " . textPrec 0 t2
-  textPrec d (t1 :.: t2) = showTextParen (d > 10) $ textPrec 10 t1 . showText " " . textPrec 11 t2
+locate :: Has (Error Text) sig m => Text -> m a -> m a
+locate t m = catchError m (\e -> throwError (e <> t))
 
-instance ShowLatex Type where
-  showsLatexPrec _ One = showText "\\bold{1}"
-  showsLatexPrec _ Zero = showText "\\bold{0}"
-  showsLatexPrec _ (TypeVar v) = showText v
-  showsLatexPrec _ (TypeCall n) = showText n
-  showsLatexPrec d (t1 :->: t2) = showTextParen (d > 5) $ showsLatexPrec 6 t1 . showText " \\multimap " . showsLatexPrec 5 t2
-  showsLatexPrec d (t1 :*: t2) = showTextParen (d > 7) $ showsLatexPrec 8 t1 . showText " \\otimes " . showsLatexPrec 8 t2
-  showsLatexPrec d (t1 :+: t2) = showTextParen (d > 6) $ showsLatexPrec 7 t1 . showText " \\oplus " . showsLatexPrec 7 t2
-  showsLatexPrec d (t1 :&: t2) = showTextParen (d > 7) $ showsLatexPrec 8 t1 . showText " \\& " . showsLatexPrec 8 t2
-  showsLatexPrec d (Mu v t) = showTextParen (d > 1) $ showText "\\mu " . showText v . showText " . \\space " . showsLatexPrec 1 t
-  showsLatexPrec d (TypeLam v k t2) = showTextParen (d > 1) $ showText "\\lambda (" . showText v . showText  " : " . showsLatexPrec 0 k . showText "). \\space " . showsLatexPrec 1 t2
-  showsLatexPrec d (t1 :.: t2) = showTextParen (d > 10) $ showsLatexPrec 10 t1 . showText " \\space " . showsLatexPrec 11 t2
+inType :: Has (Error Text) sig m => Type -> m a -> m a
+inType t = locate $ "\nIn type " <> text t
 
-type Normalized = Type
+kind :: (Has (Error Text) sig m, Has (Reader [Synonym]) sig m) => Bool -> Map Var Kind -> Type -> m Kind
+kind _ _ (TConst _) = pure Type
+kind b m ty@(TOp _ t1 t2) = inType ty $ do
+  kindIsType b m t1
+  kindIsType b m t2
+  pure Type
+kind b m ty@(TApp t1 t2) = inType ty $ do
+  k1 <- kind b m t1
+  k2 <- kind b m t2
+  case k1 of
+    a :->> b -> do
+      if a == k2
+        then pure b
+        else throwError $ "cannot apply " <> text t1 <> " : " <> text k1 <> " to " <> text t2 <> " : " <> text k2
+    _ -> throwError $ "not a type-level function: " <> text t1 <> " : " <> text k1
+kind b m ty@(TLam v k t) = inType ty $ do
+  k' <- kind b (Map.insert v k m) t
+  pure (k :->> k')
+kind b m ty@(TMu v t) = inType ty $ do
+  kindIsType b (Map.insert v Type m) t
+  pure Type
+kind b m ty@(TVar v) = inType ty $ case Map.lookup v m of
+  Just k -> pure k
+  Nothing -> if b 
+    then pure Type
+    else throwError $ "unbound type variable: " <> v
+kind _ _ ty@(TCall n) = inType ty $ do
+  ss <- ask @[Synonym]
+  case lookup n ss of
+    Just (Syn _ k) -> pure k
+    Just (Data k)  -> pure k
+    Nothing        -> throwError $ "type name not found: " <> n
 
-type TypeContext = [(Name, Kind)]
+kindIsType :: (Has (Error Text) sig m, Has (Reader [Synonym]) sig m) => Bool -> Map Var Kind -> Type -> m ()
+kindIsType b m t = do
+  k <- kind b m t
+  case k of
+    Type -> pure ()
+    _    -> throwError $ "not of kind *: " <> text t <> " : " <> text k
 
-type Synonym = (Name, (Type, Normalized, Kind))
+closedKind :: (Has (Error Text) sig m, Has (Reader [Synonym]) sig m) => Type -> m Kind
+closedKind = kind False Map.empty
 
-instance ShowText Synonym where
-  text (nm, (ty, nf, kind)) = "type " <> nm <> " = "  <> text ty <> " ↪ " <> text nf <> " : " <> text kind
+openKindIsType :: (Has (Error Text) sig m, Has (Reader [Synonym]) sig m) => Type -> m ()
+openKindIsType = kindIsType True Map.empty
 
-instance ShowLatex Synonym where
-  showsLatexPrec _ (nm, (ty, nf, kind)) =
-    showText "\\text{type } " . showText nm . showText " = " . showsLatexPrec 0 ty .
-    showText " \\hookrightarrow " . showsLatexPrec 0 nf . showText " : " . showsLatexPrec 0 kind
-
-whnf :: [Synonym] -> TypeContext -> Type -> Maybe Type
-whnf ss vs (t1 :.: t2) = do
-  t1' <- whnf ss vs t1
+whnf :: (Has (Reader [Synonym]) sig m) => Type -> m Type
+whnf (TApp t1 t2) = do
+  t1' <- whnf t1
   case t1' of
-    TypeLam v _ body -> do
-      case subst v t2 body of
-        term@(_ :.: _) -> whnf ss vs term
-        term -> pure term
-    _           -> Nothing
-whnf _ vs (TypeVar v) = case lookup v vs of
-  Just _  -> Just (TypeVar v)
-  Nothing -> Nothing
-whnf ss _ (TypeCall n) = case lookup n ss of
-  Just (t, _, _) -> whnf ss [] t -- TODO: type synonym out of scope
-  Nothing     -> Nothing
-whnf _ _ x = Just x
+    TLam v _ body -> do
+      case subst (Map.singleton v t2) body of
+        term@TApp{} -> whnf term
+        term        -> pure term
+    _             -> error . T.unpack $ "impossible: not a type-level function: " <> text t1
+whnf (TCall n) = do
+  ss <- ask @[Synonym]
+  case lookup n ss of
+    Just (Syn t _) -> whnf t
+    Just (Data _)  -> pure $ TCall n
+    Nothing        -> error . T.unpack $ "impossible: type name not found: " <> n
+whnf x = pure x
 
-addLeftLocale :: Type -> Either Text a -> Either Text a
-addLeftLocale _ (Right a) = Right a
-addLeftLocale t (Left s) = Left $ s <> "\nin type " <> text t
+unifyPrim :: (Has (Error Text) sig m, Has (Reader [Synonym]) sig m) => Bool -> Type -> Type -> m Substitution
+unifyPrim _ (TVar v) (TCall n) = pure $ Map.singleton v (TCall n)
+unifyPrim b (TCall n) (TVar v) = if b
+  then pure $ Map.singleton v (TCall n)
+  else throwError $ "cannot unify " <> n <> " to given type variable " <> v <> " which is more general"
+unifyPrim _ (TCall n1) (TCall n2)
+  | n1 == n2 = pure idSubst
+unifyPrim b t1 t2 = do
+  t1' <- whnf t1
+  t2' <- whnf t2
+  unify' t1' t2'
+  where
+    unify' :: _
+    unify' (TOp op t1 t2) (TOp op' t1' t2')
+      | op == op' = do
+          s1 <- unifyPrim b t1 t1'
+          s2 <- unifyPrim b (subst s1 t2) (subst s1 t2')
+          pure $ s2 `compose` s1
+      | otherwise = throwError $ "cannot unify " <> text (TOp op t1 t2) <> " and " <> text (TOp op' t1' t2') <> " with different operators"
+    unify' (TVar a) t
+      | t == TVar a = pure idSubst
+      | a `elem` free t = throwError $ "occurs check: " <> a <> " in " <> text t
+      | otherwise = pure $ Map.singleton a t
+    unify' t (TVar a) = if b
+      then unify' (TVar a) t
+      else throwError $ "cannot unify " <> text t <> " to given type variable " <> a <> " which is more general"
+    unify' (TMu v t) (TMu v' t')
+      | v == v' = unifyPrim b t t'
+      | otherwise = unifyPrim b t (rename v' v t')
+    unify' (TConst c) (TConst c')
+      | c == c' = pure idSubst
+      | otherwise = throwError $ "cannot unify " <> text (TConst c) <> " and " <> text (TConst c')
+    unify' (TApp {}) (TApp {}) = error "impossible"
+    unify' (TLam {}) (TLam {}) = error "impossible"
+    unify' a b = throwError $ "cannot unify " <> text a <> " and " <> text b
 
-normalize :: [Synonym] -> TypeContext -> Type -> Either Text (Normalized, Kind)
-normalize _ _ One = Right (One, Type)
-normalize _ _ Zero = Right (Zero, Type)
-normalize _ vs ty@(TypeVar v) = addLeftLocale ty $ case lookup v vs of
-  Just k  -> Right (TypeVar v, k)
-  Nothing -> Left $ "type variable not found in context: " <> v
-normalize ss _ ty@(TypeCall n) = addLeftLocale ty $ case lookup n ss of
-  Just (_, t, k) -> Right (t, k)
-  Nothing        -> Left $ "type synonym not found in global synonyms: " <> n
-normalize ss vs ty@(t1 :->: t2) = addLeftLocale ty $ do
-  (t1', k1) <- normalize ss vs t1
-  unless (k1 == Type) $ Left $ "type " <> text t1 <> " : " <> text k1 <> " is not of kind *"
-  (t2', k2) <- normalize ss vs t2
-  unless (k2 == Type) $ Left $ "type " <> text t2 <> " : " <> text k2 <> " is not of kind *"
-  pure (t1' :->: t2', Type)
-normalize ss vs ty@(t1 :*: t2) = addLeftLocale ty $ do
-  (t1', k1) <- normalize ss vs t1
-  unless (k1 == Type) $ Left $ "type " <> text t1 <> " : " <> text k1 <> " is not of kind *"
-  (t2', k2) <- normalize ss vs t2
-  unless (k2 == Type) $ Left $ "type " <> text t2 <> " : " <> text k2 <> " is not of kind *"
-  pure (t1' :*: t2', Type)
-normalize ss vs ty@(t1 :+: t2) = addLeftLocale ty $ do
-  (t1', k1) <- normalize ss vs t1
-  unless (k1 == Type) $ Left $ "type " <> text t1 <> " : " <> text k1 <> " is not of kind *"
-  (t2', k2) <- normalize ss vs t2
-  unless (k2 == Type) $ Left $ "type " <> text t2 <> " : " <> text k2 <> " is not of kind *"
-  pure (t1' :+: t2', Type)
-normalize ss vs ty@(t1 :&: t2) = addLeftLocale ty $ do
-  (t1', k1) <- normalize ss vs t1
-  unless (k1 == Type) $ Left $ "type " <> text t1 <> " : " <> text k1 <> " is not of kind *"
-  (t2', k2) <- normalize ss vs t2
-  unless (k2 == Type) $ Left $ "type " <> text t2 <> " : " <> text k2 <> " is not of kind *"
-  pure (t1' :&: t2', Type)
-normalize ss vs ty@(Mu v t) = addLeftLocale ty $ do
-  (t', k) <- normalize ss ((v, Type) : vs) t
-  unless (k == Type) $ Left $ "type " <> text t <> " : " <> text k <> " is not of kind *"
-  pure (Mu v t', Type)
-normalize ss vs ty@(TypeLam v k t) = addLeftLocale ty $ do
-  (t', k') <- normalize ss ((v, k) : vs) t
-  pure (TypeLam v k t', k :->> k')
-normalize ss vs ty@(t1 :.: t2) = addLeftLocale ty $ do
-  (t1', k1) <- normalize ss vs t1
-  case t1' of
-    TypeLam v k t -> do
-      (t2', k2) <- normalize ss vs t2
-      if k2 == k
-        then normalize ss vs (subst v t2' t)
-        else Left $ "can't apply type-level function " <> text t1 <> " : " <> text k1 <> " to " <> text t2 <> " : " <> text k2
-    _           -> Left $ "type " <> text t1 <> " : " <> text k1 <> " is not a type-level function"
+unify :: (Has (Error Text) sig m, Has (Reader [Synonym]) sig m) => Type -> Type -> m Substitution
+unify = unifyPrim True
 
--- | @'subst' v t m@ = @m[v := t]@
-subst :: Var -> Type -> Type -> Type
-subst _ _ One = One
-subst _ _ Zero = Zero
-subst v t (TypeVar s)
-  | s == v = t
-  | otherwise = TypeVar s
-subst _ _ (TypeCall n) = TypeCall n
-subst v t (ty :->: ty') = subst v t ty :->: subst v t ty'
-subst v t (ty :*: ty')  = subst v t ty :*: subst v t ty'
-subst v t (ty :+: ty')  = subst v t ty :+: subst v t ty'
-subst v t (ty :&: ty')  = subst v t ty :&: subst v t ty'
-subst v t (Mu s ty)
-  | s /= v = Mu s (subst v t ty)
-  | otherwise = Mu s ty
-subst v t (TypeLam s k ty)
-  | s /= v = TypeLam s k (subst v t ty)
-  | otherwise = TypeLam s k ty
-subst v t (ty1 :.: ty2) = subst v t ty1 :.: subst v t ty2
+-- | Usage: @general `unifyTo` specific@
+unifyTo :: (Has (Error Text) sig m, Has (Reader [Synonym]) sig m) => Type -> Type -> m Substitution
+unifyTo = unifyPrim False
 
--- | @'rename' v w m@ = rename v to w in m
+lookup' :: Eq a => a -> [(a, b, c)] -> Maybe (b, c)
+lookup' x = go
+  where
+    go [] = Nothing
+    go ((x', b, c) : xs)
+      | x == x' = Just (b, c)
+      | otherwise = go xs
+
+lft :: (a, b, c) -> a
+lft (a, _, _) = a
+
+mid :: (a, b, c) -> b
+mid (_, b, _) = b
+
+rgt :: (a, b, c) -> c
+rgt (_, _, c) = c
+
+type Substitution = Map Var Type
+
+idSubst :: Substitution
+idSubst = Map.empty
+
+compose :: Substitution -> Substitution -> Substitution
+compose s1 s2 = fmap (subst s1) s2 `Map.union` s1
+
+instance {-# Overlapping #-} Semigroup Substitution where
+  (<>) = compose
+
+instance {-# Overlapping #-} Monoid Substitution where
+  mempty = idSubst
+
+class Substitutable a where
+  subst :: Substitution -> a -> a
+
+instance Substitutable Type where
+  subst s (TVar v)       = fromMaybe (TVar v) (Map.lookup v s)
+  subst s (TOp op t1 t2) = TOp op (subst s t1) (subst s t2)
+  subst s (TApp t1 t2)   = TApp (subst s t1) (subst s t2)
+  subst s (TMu v t)      = TMu v (subst (Map.delete v s) t)
+  subst s (TLam v k t)   = TLam v k (subst (Map.delete v s) t)
+  subst _ t              = t
+
+instance Substitutable Context where
+  subst s = fmap (second $ subst s)
+
 rename :: Var -> Var -> Type -> Type
-rename v s = subst v (TypeVar s)
+rename v v' = subst $ Map.singleton v (TVar v')
 
--- Note only normal forms are able to be determined equal.
-instance Eq Normalized where
-  One  == One  = True
-  Zero == Zero = True
-  (TypeVar s) == (TypeVar s') = s == s'
-  -- TypeCall should not appear in normal forms.
-  (ty :->: ty') == (ty1 :->: ty1') = ty == ty1 && ty' == ty1'
-  (ty :*: ty')  == (ty1 :*: ty1')  = ty == ty1 && ty' == ty1'
-  (ty :+: ty')  == (ty1 :+: ty1')  = ty == ty1 && ty' == ty1'
-  (ty :&: ty')  == (ty1 :&: ty1')  = ty == ty1 && ty' == ty1'
-  (Mu s ty) == (Mu s' ty') = if s == s'
-    then ty == ty'
-    else ty == rename s' s ty'
-  (TypeLam s k ty) == (TypeLam s' k' ty') = k == k' && if s == s'
-    then ty == ty'
-    else ty == rename s' s ty'
-  ty1 :.: ty2 == ty1' :.: ty2' = ty1 == ty1' && ty2 == ty2'
-  _ == _ = False
-
-instance Ord Type where
-  a `compare` b = size a `compare` size b
-    where
-      size :: Type -> Int
-      size One = 1
-      size Zero = 1
-      size (ty :->: ty') = size ty + size ty' + 1
-      size (ty :*: ty') = size ty + size ty' + 1
-      size (ty :+: ty') = size ty + size ty' + 1
-      size (ty :&: ty') = size ty + size ty' + 1
-      size (TypeVar _) = 1
-      size (TypeCall _) = 1
-      size (Mu _ ty) = size ty + 1
-      size ((:.:) ty1 ty2) = size ty1 + size ty2 + 1
-      size (TypeLam _ _ ty) = size ty + 1
-
--- | @expand _ v m@ = @m[v := μ v. m]@, that is, the result of expanding @μ v. m@. The first argument is an optional type synonym for @μ v. m@.
-expand :: Maybe Type -> Var -> Type -> Type
-expand (Just ty) v t = subst v ty t
-expand Nothing v t = subst v (Mu v t) t
+free :: Type -> Set Var
+free (TVar v)      = Set.singleton v
+free (TOp _ t1 t2) = free t1 `Set.union` free t2
+free (TApp t1 t2)  = free t1 `Set.union` free t2
+free (TMu v t)     = Set.delete v (free t)
+free (TLam v _ t)  = Set.delete v (free t)
+free _             = Set.empty
